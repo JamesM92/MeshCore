@@ -68,8 +68,15 @@ void RadioLibWrapper::doResetAGC() {
 }
 
 void RadioLibWrapper::resetAGC() {
-  // make sure we're not mid-receive of packet!
-  if ((state & STATE_INT_READY) != 0 || isReceivingPacket()) return;
+  if (state & STATE_INT_READY) return;  // interrupt pending — don't interrupt mid-packet
+  if (isReceivingPacket()) {
+    // PREAMBLE_DETECTED / HEADER_VALID IRQ flags are sticky: set by interference and
+    // never cleared unless a complete packet arrives (RX_DONE) or the radio sleeps.
+    // A real packet at SF7 is < 500ms; if blocked for 3 consecutive intervals the
+    // "reception" is interference, not a real packet — force the calibration.
+    if (++_agc_block_count < 3) return;
+  }
+  _agc_block_count = 0;
 
   doResetAGC();
   state = STATE_IDLE;   // trigger a startReceive()
@@ -130,6 +137,7 @@ int RadioLibWrapper::recvRaw(uint8_t* bytes, int sz) {
       } else {
       //  Serial.print("  readData() -> "); Serial.println(len);
         n_recv++;
+        _agc_block_count = 0;  // genuine packet received — clear stuck-detection counter
       }
     }
     state = STATE_IDLE;   // need another startReceive()
