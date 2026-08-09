@@ -189,7 +189,14 @@ bool RadioLibWrapper::isSendComplete() {
 void RadioLibWrapper::onSendFinished() {
   _radio->finishTransmit();
   _board->onAfterTransmit();
-  state = STATE_IDLE;
+  // Recalibrate AGC immediately after TX before returning to RX.
+  // Without this the SX126x goes TX → startReceive() with no AGC reset, leaving
+  // gain settings tuned for TX power levels.  Any nearby signal that arrives
+  // during that window can trip PREAMBLE_DETECTED on a miscalibrated receiver,
+  // locking the radio deaf until the 30s resetAGC() timer fires.
+  // This mirrors the Room Server fix in PR #1743 (Calibrate(0x7F) after TX).
+  doResetAGC();   // → sx126xResetAGC(): sleep + Calibrate(0x7F) + image recal
+  state = STATE_IDLE;   // triggers startReceive() in next loop()
 }
 
 bool RadioLibWrapper::isChannelActive() {
