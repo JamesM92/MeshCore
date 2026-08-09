@@ -72,9 +72,13 @@ void RadioLibWrapper::resetAGC() {
   if (isReceivingPacket()) {
     // PREAMBLE_DETECTED / HEADER_VALID IRQ flags are sticky: set by interference and
     // never cleared unless a complete packet arrives (RX_DONE) or the radio sleeps.
-    // A real packet at SF7 is < 500ms; if blocked for 3 consecutive intervals the
-    // "reception" is interference, not a real packet — force the calibration.
-    if (++_agc_block_count < 3) return;
+    // Originally the bypass threshold was 3 intervals (~90s at the 30s default).
+    // Reduced to 1 interval (~30s) because a strong nearby transmitter (e.g. a device
+    // within 10m) can re-trigger the lockup within seconds of each calibration, making
+    // a 90s window far too long — the radio spends most of its time deaf.
+    // A real LoRa packet at SF7 completes in < 500ms, so even 1 blocked interval
+    // (30s) is orders of magnitude longer than any genuine reception.
+    if (++_agc_block_count < 1) return;
     _agc_forced_total++;   // track how many times we had to bypass the stuck-IRQ guard
   }
   _agc_block_count = 0;
