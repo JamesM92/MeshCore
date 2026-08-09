@@ -12,7 +12,9 @@ protected:
   uint16_t _num_floor_samples;
   int32_t _floor_sample_sum;
   uint8_t _preamble_sf;
-  uint8_t _agc_block_count;  // consecutive resetAGC() calls blocked by isReceivingPacket()
+  uint8_t  _agc_block_count;   // consecutive resetAGC() calls blocked by isReceivingPacket()
+  uint32_t _agc_resets_total;  // total times doResetAGC() ran (30s timer fired and radio was idle)
+  uint32_t _agc_forced_total;  // total times forced past sticky IRQ (block_count bypass triggered)
 
   void idle();
   void startRecv();
@@ -21,7 +23,10 @@ protected:
   virtual void doResetAGC();
 
 public:
-  RadioLibWrapper(PhysicalLayer& radio, mesh::MainBoard& board) : _radio(&radio), _board(&board), _preamble_sf(0), _agc_block_count(0) { n_recv = n_sent = 0; }
+  RadioLibWrapper(PhysicalLayer& radio, mesh::MainBoard& board)
+    : _radio(&radio), _board(&board), _preamble_sf(0),
+      _agc_block_count(0), _agc_resets_total(0), _agc_forced_total(0)
+    { n_recv = n_sent = n_recv_errors = 0; }
 
   void begin() override;
   virtual void powerOff() { _radio->sleep(); }
@@ -57,6 +62,8 @@ public:
   uint32_t getPacketsRecv() const { return n_recv; }
   uint32_t getPacketsRecvErrors() const { return n_recv_errors; }
   uint32_t getPacketsSent() const { return n_sent; }
+  uint32_t getAGCResetsTotal() const { return _agc_resets_total; }
+  uint32_t getAGCForcedTotal() const { return _agc_forced_total; }
   void resetStats() { n_recv = n_sent = n_recv_errors = 0; }
 
   virtual float getLastRSSI() const override;

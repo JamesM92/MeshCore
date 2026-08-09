@@ -1889,6 +1889,14 @@ void MyMesh::handleCmdFrame(size_t len) {
       memcpy(&out_frame[i], &n_recv_flood, 4); i += 4;
       memcpy(&out_frame[i], &n_recv_direct, 4); i += 4;
       memcpy(&out_frame[i], &n_recv_errors, 4); i += 4;
+      // Extended fields (bytes 30-37): AGC health counters from our custom firmware.
+      // agc_resets: total times the 30s timer ran doResetAGC() on an idle radio.
+      // agc_forced: total times the sticky-IRQ bypass triggered (interference detected).
+      // Python library handles this as an optional extension: "if len(data) >= 38".
+      uint32_t agc_resets = radio_driver.getAGCResetsTotal();
+      uint32_t agc_forced = radio_driver.getAGCForcedTotal();
+      memcpy(&out_frame[i], &agc_resets, 4); i += 4;
+      memcpy(&out_frame[i], &agc_forced, 4); i += 4;
       _serial->writeFrame(out_frame, i);
     } else {
       writeErrFrame(ERR_CODE_ILLEGAL_ARG); // invalid stats sub-type

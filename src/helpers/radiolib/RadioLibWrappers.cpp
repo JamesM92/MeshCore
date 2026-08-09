@@ -75,8 +75,10 @@ void RadioLibWrapper::resetAGC() {
     // A real packet at SF7 is < 500ms; if blocked for 3 consecutive intervals the
     // "reception" is interference, not a real packet — force the calibration.
     if (++_agc_block_count < 3) return;
+    _agc_forced_total++;   // track how many times we had to bypass the stuck-IRQ guard
   }
   _agc_block_count = 0;
+  _agc_resets_total++;   // track every successful AGC recalibration
 
   doResetAGC();
   state = STATE_IDLE;   // trigger a startReceive()
