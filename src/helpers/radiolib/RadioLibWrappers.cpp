@@ -68,20 +68,11 @@ void RadioLibWrapper::doResetAGC() {
 }
 
 void RadioLibWrapper::resetAGC() {
-  if (state & STATE_INT_READY) return;  // interrupt pending — don't interrupt mid-packet
-  if (isReceivingPacket()) {
-    // PREAMBLE_DETECTED / HEADER_VALID IRQ flags are sticky: set by interference and
-    // never cleared unless a complete packet arrives (RX_DONE) or the radio sleeps.
-    // Originally the bypass threshold was 3 intervals (~90s at the 30s default).
-    // Reduced to 1 interval (~30s) because a strong nearby transmitter (e.g. a device
-    // within 10m) can re-trigger the lockup within seconds of each calibration, making
-    // a 90s window far too long — the radio spends most of its time deaf.
-    // A real LoRa packet at SF7 completes in < 500ms, so even 1 blocked interval
-    // (30s) is orders of magnitude longer than any genuine reception.
-    if (++_agc_block_count < 1) return;
-    _agc_forced_total++;   // track how many times we had to bypass the stuck-IRQ guard
-  }
-  _agc_block_count = 0;
+  // isReceivingPacket() now auto-clears stuck PREAMBLE_DETECTED/HEADER_VALID flags
+  // via timeout (≤ _preambleMillis ≈ 66 ms) in CustomSX1262::isReceiving(), so we
+  // no longer need a forced bypass.  A genuine in-flight packet clears in < 500 ms
+  // at SF7; if isReceivingPacket() still returns true here, it's an active receive.
+  if ((state & STATE_INT_READY) != 0 || isReceivingPacket()) return;
   _agc_resets_total++;   // track every successful AGC recalibration
 
   doResetAGC();
@@ -143,7 +134,6 @@ int RadioLibWrapper::recvRaw(uint8_t* bytes, int sz) {
       } else {
       //  Serial.print("  readData() -> "); Serial.println(len);
         n_recv++;
-        _agc_block_count = 0;  // genuine packet received — clear stuck-detection counter
       }
     }
     state = STATE_IDLE;   // need another startReceive()
@@ -189,13 +179,16 @@ bool RadioLibWrapper::isSendComplete() {
 void RadioLibWrapper::onSendFinished() {
   _radio->finishTransmit();
   _board->onAfterTransmit();
-  // Recalibrate AGC immediately after TX before returning to RX.
-  // Without this the SX126x goes TX → startReceive() with no AGC reset, leaving
-  // gain settings tuned for TX power levels.  Any nearby signal that arrives
-  // during that window can trip PREAMBLE_DETECTED on a miscalibrated receiver,
-  // locking the radio deaf until the 30s resetAGC() timer fires.
-  // This mirrors the Room Server fix in PR #1743 (Calibrate(0x7F) after TX).
-  doResetAGC();   // → sx126xResetAGC(): sleep + Calibrate(0x7F) + image recal
+  // No calibration here.  Previously this called doResetAGC() (sleep + Calibrate)
+  // or doPostTxCalibrate() (no-sleep Calibrate) to reset the AGC before returning
+  // to RX.  Both approaches caused progressive RX deafness on TCXO boards (Heltec V3
+  // DIO3 TCXO at 1.8 V): repeated Calibrate() calls degrade the TCXO state.
+  //
+  // The stuck-IRQ problem that motivated the post-TX calibration is now handled by
+  // CustomSX1262::isReceiving(), which auto-clears PREAMBLE_DETECTED after ≤ 66 ms
+  // by calling clearIrqFlags() directly — no sleep or full recalibration needed.
+  // The 30-second doResetAGC() timer provides periodic deeper recalibration
+  // (with TCXO-safe mask 0x7C) only when the radio is idle.
   state = STATE_IDLE;   // triggers startReceive() in next loop()
 }
 
@@ -222,6 +215,24 @@ static float snr_threshold[] = {
     -20   // SF12 needs at least -20 dB SNR
 };
   
+PacketMillis RadioLibWrapper::calcMaxPacketMillis(uint8_t sf, float bw, uint8_t cr, uint8_t preambleSymbols) {
+  // based on RadioLib's calculateTimeOnAir()
+  uint32_t tsym_us = ((uint32_t)10000 << sf) / (bw * 10);
+  uint32_t sfCoeff1_x4 = (sf == 5 || sf == 6) ? 25 : 17;  // 6.25 : 4.25 — Semtech magic numbers for sync word + SFD
+
+  // preamble + syncword + sfd + header
+  uint32_t preamble_us = (((preambleSymbols + 8) * 4 + sfCoeff1_x4) * tsym_us) / 4;
+
+  // airtime for max packet at current radio settings
+  uint32_t total_us = _radio->getTimeOnAir(MAX_TRANS_UNIT);
+  // airtime for payload only (no preamble, header, or SOF)
+  uint32_t payload_us = total_us > preamble_us ? total_us - preamble_us : 4000 - preamble_us;
+  // rescale for max possible CR
+  if (cr >= 5 && cr < 8) { payload_us = (payload_us * 8) / cr; }
+
+  return PacketMillis { (preamble_us + 999) / 1000, (payload_us + 999) / 1000 };
+}
+
 float RadioLibWrapper::packetScoreInt(float snr, int sf, int packet_len) {
   if (sf < 7) return 0.0f;
   

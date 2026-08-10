@@ -3,6 +3,15 @@
 #include <Mesh.h>
 #include <RadioLib.h>
 
+// Deadlines (in ms) for the timeout-based isReceiving() stuck-IRQ auto-clear logic.
+// preambleMillis: how long after PREAMBLE_DETECTED to wait for HEADER_VALID before clearing.
+// payloadMillis:  how long after HEADER_VALID to wait for RX_DONE before clearing.
+// Computed by calcMaxPacketMillis() from SF/BW/CR and passed to each chip's isReceiving().
+struct PacketMillis {
+  uint32_t preambleMillis;
+  uint32_t payloadMillis;
+};
+
 class RadioLibWrapper : public mesh::Radio {
 protected:
   PhysicalLayer* _radio;
@@ -12,9 +21,8 @@ protected:
   uint16_t _num_floor_samples;
   int32_t _floor_sample_sum;
   uint8_t _preamble_sf;
-  uint8_t  _agc_block_count;   // consecutive resetAGC() calls blocked by isReceivingPacket()
   uint32_t _agc_resets_total;  // total times doResetAGC() ran (30s timer fired and radio was idle)
-  uint32_t _agc_forced_total;  // total times forced past sticky IRQ (block_count bypass triggered)
+  uint32_t _agc_forced_total;  // kept for stats compatibility (always 0 — bypass no longer needed)
 
   void idle();
   void startRecv();
@@ -25,7 +33,7 @@ protected:
 public:
   RadioLibWrapper(PhysicalLayer& radio, mesh::MainBoard& board)
     : _radio(&radio), _board(&board), _preamble_sf(0),
-      _agc_block_count(0), _agc_resets_total(0), _agc_forced_total(0)
+      _agc_resets_total(0), _agc_forced_total(0)
     { n_recv = n_sent = n_recv_errors = 0; }
 
   void begin() override;
@@ -38,9 +46,8 @@ public:
   bool isInRecvMode() const override;
   bool isChannelActive();
 
-  bool isReceiving() override { 
+  bool isReceiving() override {
     if (isReceivingPacket()) return true;
-
     return isChannelActive();
   }
 
@@ -52,6 +59,7 @@ public:
   virtual uint8_t getSpreadingFactor() const { return LORA_SF; }
   static uint16_t preambleLengthForSF(uint8_t sf) { return sf <= 8 ? 32 : 16; }
   void updatePreamble(uint8_t sf) { _preamble_sf = sf; _radio->setPreambleLength(preambleLengthForSF(sf)); }
+  PacketMillis calcMaxPacketMillis(uint8_t sf, float bw, uint8_t cr, uint8_t preambleSymbols);
 
   int getNoiseFloor() const override { return _noise_floor; }
   void triggerNoiseFloorCalibrate(int threshold) override;

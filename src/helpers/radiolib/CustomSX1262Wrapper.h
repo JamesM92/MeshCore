@@ -18,6 +18,11 @@ public:
     ((CustomSX1262 *)_radio)->setBandwidth(bw);
     ((CustomSX1262 *)_radio)->setCodingRate(cr);
     updatePreamble(sf);
+    // Update isReceiving() timeouts to match current SF/BW/CR so stuck-IRQ
+    // auto-clear fires at the right time (preamble ≈ 66 ms, max payload ≈ 4 s at SF7).
+    PacketMillis pm = calcMaxPacketMillis(sf, bw, cr, preambleLengthForSF(sf));
+    ((CustomSX1262 *)_radio)->setPreambleMillis(pm.preambleMillis);
+    ((CustomSX1262 *)_radio)->setMaxPayloadMillis(pm.payloadMillis);
   }
 
   bool isReceivingPacket() override { 
